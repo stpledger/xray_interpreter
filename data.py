@@ -13,7 +13,7 @@ class ImageDataset:
     _cache_images: bool
     labels: dict[str, int]  # Adjust the label type as needed
 
-    def __init__(self, split: str, cache_images: bool = True):
+    def __init__(self, split: str, cache_images: bool = True, transform=None):
         # Create a list of image paths that have a corresponding label.
         labels_csv = pd.read_csv(f"{split}.csv", index_col=0).drop(columns=['Patient ID'])
         self.labels = labels_csv.apply(lambda row: row.tolist(), axis=1).to_dict()
@@ -22,6 +22,7 @@ class ImageDataset:
         self.image_paths = [p for p in all_paths if p.name in self.labels]
         self._image_cache = [None] * len(self.image_paths)
         self._cache_images = cache_images
+        self.transform = transform
 
     def __len__(self) -> int:
         return len(self.image_paths)
@@ -33,10 +34,15 @@ class ImageDataset:
             cached_image = self._image_cache[idx]
             if cached_image is not None:
                 img = cached_image
-        else:
-            img = torch.tensor(np.array(Image.open(self.image_paths[idx])), dtype=torch.uint8)
-            if self._cache_images:
+            else:
+                img = Image.open(self.image_paths[idx]).copy()
                 self._image_cache[idx] = img
+        else:
+            img = Image.open(self.image_paths[idx]).copy()
+        
+        # Apply transforms if provided
+        if self.transform is not None:
+            img = self.transform(img)
 
         # Retrieve the label using the image file name
         label = torch.Tensor(self.labels[self.image_paths[idx].name])

@@ -16,6 +16,7 @@ class ImageDataset:
     def __init__(self, split: str, cache_images: bool = True, transform=None):
         # Create a list of image paths that have a corresponding label.
         labels_csv = pd.read_csv(f"{split}.csv", index_col=0).drop(columns=['Patient ID'])
+        self.label_names = labels_csv.columns.tolist()
         self.labels = labels_csv.apply(lambda row: row.tolist(), axis=1).to_dict()
 
         all_paths = list((IMAGES_PATH).rglob("*.png"))

@@ -1,11 +1,19 @@
 from datetime import datetime
 from pathlib import Path
-from PIL import Image
 import inspect
-import torchvision.transforms as T
-import model
+
 import torch
-torch.set_float32_matmul_precision('high') # For my GPU
+from PIL import Image
+import torchvision.transforms as T
+import lightning as L
+from lightning.pytorch.loggers import TensorBoardLogger
+
+from data import ImageDataset
+from model import EfficientNetB1
+import model
+from metrics import log_confusion, log_class_stats
+
+torch.set_float32_matmul_precision('high')  # For my GPU
 
 
 models = {
@@ -36,12 +44,6 @@ def get_transform(do_transform: bool, resize: int = 256, crop: int = 240, norm: 
         return T.Compose([T.ToTensor()])
 
 def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 32, do_transform: bool = True, transform: str = "efficientnet", fresh: bool = False, res: int = 256, crop: int = 240):
-    import lightning as L
-    from lightning.pytorch.loggers import TensorBoardLogger
-
-    from data import ImageDataset
-    from model import EfficientNetB1
-
     class Trainer(L.LightningModule):
         def __init__(self, model):
             super().__init__()
@@ -50,55 +52,6 @@ def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 32, do_tra
             self.train_outputs = []
             self.val_outputs = []
 
-        def log_confusion(self, y_hat, y, split: str):
-            pred = (torch.sigmoid(y_hat) > 0.5).float()
-            TP = ((pred == 1) & (y == 1)).sum()
-            TN = ((pred == 0) & (y == 0)).sum()
-            FP = ((pred == 1) & (y == 0)).sum()
-            FN = ((pred == 0) & (y == 1)).sum()
-            accuracy = (TP + TN) / (TP + TN + FP + FN)
-            precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
-            recall = TP / (TP + FN) if (TP + FN) > 0 else 0.0
-            f1_score = 2.0 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
-            self.log(f'{split}/accuracy', accuracy)
-            self.log(f'{split}/precision', precision)
-            self.log(f'{split}/recall', recall)
-            self.log(f'{split}/f1_score', f1_score)
-            return
-        
-        def log_class_stats(self, y_hat, y, split: str):
-            prob = torch.sigmoid(y_hat)
-            pred = (prob > 0.5).float()
-            for i, label in enumerate(self.label_names):
-                TP = ((pred[:, i] == 1) & (y[:, i] == 1)).sum()
-                TN = ((pred[:, i] == 0) & (y[:, i] == 0)).sum()
-                FP = ((pred[:, i] == 1) & (y[:, i] == 0)).sum()
-                FN = ((pred[:, i] == 0) & (y[:, i] == 1)).sum()
-                accuracy = (TP + TN) / (TP + TN + FP + FN)
-                precision = TP / (TP + FP) if (TP + FP) > 0 else 0.0
-                recall = TP / (TP + FN) if (TP + FN) > 0 else 0.0
-                f1_score = 2.0 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
-
-                self.log(f'{label}/{split}/accuracy', accuracy)
-                self.log(f'{label}/{split}/precision', precision)
-                self.log(f'{label}/{split}/recall', recall)
-                self.log(f'{label}/{split}/f1_score', f1_score)
-
-                # Compute average probabilities for true and false labels
-                true_mask = y[:, i] == 1
-                false_mask = y[:, i] == 0
-                if true_mask.sum() > 0:
-                    avg_prob_true = prob[:, i][true_mask].mean()
-                else:
-                    avg_prob_true = torch.tensor(0.0, device=prob.device)
-                if false_mask.sum() > 0:
-                    avg_prob_false = prob[:, i][false_mask].mean()
-                else:
-                    avg_prob_false = torch.tensor(0.0, device=prob.device)
-                self.log(f'{label}/{split}/avg_prob_true', avg_prob_true)
-                self.log(f'{label}/{split}/avg_prob_false', avg_prob_false)
-
         def training_step(self, batch, batch_idx):
             x, y = batch
             y_hat, additional_losses = self.model(x)
@@ -106,7 +59,7 @@ def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 32, do_tra
             self.log("train/loss", loss, prog_bar=True)
             for k, v in additional_losses.items():
                 self.log(f"train/{k}", v)
-            self.log_confusion(y_hat, y, "train")
+            log_confusion(self, y_hat, y, "train")
             self.train_outputs.append({"y_hat": y_hat, "y": y})
             return loss
 
@@ -118,20 +71,20 @@ def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 32, do_tra
             self.log("validation/loss", loss, prog_bar=True)
             for k, v in additional_losses.items():
                 self.log(f"validation/{k}", v)
-            self.log_confusion(y_hat, y, "validation")
+            log_confusion(self, y_hat, y, "validation")
             self.val_outputs.append({"y_hat": y_hat, "y": y})
             return loss
 
         def on_train_epoch_end(self):
             aggregated_y_hat = torch.cat([out["y_hat"] for out in self.train_outputs], dim=0)
             aggregated_y = torch.cat([out["y"] for out in self.train_outputs], dim=0)
-            self.log_class_stats(aggregated_y_hat, aggregated_y, "train")
+            log_class_stats(self, aggregated_y_hat, aggregated_y, self.label_names, "train")
             self.train_outputs.clear()
 
         def on_validation_epoch_end(self):
             aggregated_y_hat = torch.cat([out["y_hat"] for out in self.val_outputs], dim=0)
             aggregated_y = torch.cat([out["y"] for out in self.val_outputs], dim=0)
-            self.log_class_stats(aggregated_y_hat, aggregated_y, "validation")
+            log_class_stats(self, aggregated_y_hat, aggregated_y, self.label_names, "validation")
             self.val_outputs.clear()
 
         def configure_optimizers(self):

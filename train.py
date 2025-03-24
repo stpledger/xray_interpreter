@@ -145,7 +145,7 @@ def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 32, do_tra
         def val_dataloader(self):
             dataset = ImageDataset("test", False, transform=get_transform(do_transform, res, crop, transform))
             self.label_names = dataset.label_names
-            return torch.utils.data.DataLoader(dataset, batch_size=256, num_workers=4, shuffle=False)
+            return torch.utils.data.DataLoader(dataset, batch_size=batch_size*4, num_workers=4, shuffle=False)
 
     class CheckPointer(L.Callback):
         def on_train_epoch_end(self, trainer, pl_module):

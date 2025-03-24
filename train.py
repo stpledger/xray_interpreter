@@ -1,6 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 import inspect
+import math
 
 import torch
 from PIL import Image
@@ -9,7 +10,6 @@ import lightning as L
 from lightning.pytorch.loggers import TensorBoardLogger
 
 from data import ImageDataset
-from model import EfficientNetB1
 import model
 from transforms import get_transform
 from metrics import log_confusion, log_class_stats
@@ -23,7 +23,8 @@ models = {
 
 def train(model_name_or_path: str, 
           epochs: int = 5, 
-          batch_size: int = 32, 
+          batch_size: int = 32,
+          lr: float = 1e-3, 
           fresh: bool = False, 
           do_transform: bool = True, 
           transform: str = "efficientnet", 
@@ -73,7 +74,21 @@ def train(model_name_or_path: str,
             self.val_outputs.clear()
 
         def configure_optimizers(self):
-            return torch.optim.AdamW(self.parameters(), lr=1e-3)
+            optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+            total_steps = self.trainer.estimated_stepping_batches
+            # Define the warm-up to last for 3 epochs:
+            warmup_steps = int(total_steps * (3 / epochs))
+            
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    # Linear warm-up
+                    return float(current_step) / float(max(1, warmup_steps))
+                # Cosine annealing after warm-up
+                progress = float(current_step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+                return 0.5 * (1. + math.cos(math.pi * progress))
+            
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+            return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
 
         def train_dataloader(self):
             dataset = ImageDataset("train", False, transform=get_transform(do_transform, model_name, res, transform))

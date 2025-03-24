@@ -11,6 +11,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from data import ImageDataset
 from model import EfficientNetB1
 import model
+from transforms import get_transform
 from metrics import log_confusion, log_class_stats
 
 torch.set_float32_matmul_precision('high')  # For my GPU
@@ -20,30 +21,14 @@ models = {
     n: m for M in [model] for n, m in inspect.getmembers(M) if inspect.isclass(m) and issubclass(m, torch.nn.Module)
 }
 
-def ensure_rgb(img: Image.Image) -> Image.Image:
-    return img.convert("RGB") if img.mode != "RGB" else img
-
-def get_transform(do_transform: bool, resize: int = 256, crop: int = 240, norm: str = "efficientnet"):
-    if do_transform:
-        transform_list = [
-            T.Resize(resize),
-            T.CenterCrop(crop),
-            T.Lambda(ensure_rgb),
-            T.ToTensor()
-        ]
-        if norm == "efficientnet":
-            transform_list.append(T.Normalize(mean=[0.485, 0.456, 0.406],
-                                                std=[0.229, 0.224, 0.225]))
-        elif norm == "empirical":
-            transform_list.append(T.Normalize(mean=[0.4985, 0.4985, 0.4985],
-                                                std=[0.2493, 0.2493, 0.2493]))
-        else:
-            raise ValueError(f"Unknown normalization type: {norm}")
-        return T.Compose(transform_list)
-    else:
-        return T.Compose([T.ToTensor()])
-
-def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 32, do_transform: bool = True, transform: str = "efficientnet", fresh: bool = False, res: int = 256, crop: int = 240):
+def train(model_name_or_path: str, 
+          epochs: int = 5, 
+          batch_size: int = 32, 
+          fresh: bool = False, 
+          do_transform: bool = True, 
+          transform: str = "efficientnet", 
+          res: int = 256):
+    
     class Trainer(L.LightningModule):
         def __init__(self, model):
             super().__init__()
@@ -91,12 +76,12 @@ def train(model_name_or_path: str, epochs: int = 5, batch_size: int = 32, do_tra
             return torch.optim.AdamW(self.parameters(), lr=1e-3)
 
         def train_dataloader(self):
-            dataset = ImageDataset("train", False, transform=get_transform(do_transform, res, crop, transform))
+            dataset = ImageDataset("train", False, transform=get_transform(do_transform, model_name, res, transform))
             self.label_names = dataset.label_names
             return torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=4, shuffle=True, persistent_workers=True)
 
         def val_dataloader(self):
-            dataset = ImageDataset("test", False, transform=get_transform(do_transform, res, crop, transform))
+            dataset = ImageDataset("test", False, transform=get_transform(do_transform, model_name, res, transform))
             self.label_names = dataset.label_names
             return torch.utils.data.DataLoader(dataset, batch_size=batch_size*4, num_workers=4, shuffle=False)
 

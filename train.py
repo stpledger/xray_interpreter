@@ -28,11 +28,11 @@ def train(model_name_or_path: str,
           batch_size: int = 32,
           lr: float = 1e-3, 
           warmup: float = 3.0,
-          weighted: bool = False,
+          weighted: bool = True,
           fresh: bool = False, 
           do_transform: bool = True, 
           transform: str = "efficientnet", 
-          res: int = 256):
+          res: int = None):
     
     class Trainer(L.LightningModule):
         def __init__(self, model):
@@ -40,7 +40,7 @@ def train(model_name_or_path: str,
             self.model = model
 
             if weighted:
-                df = pd.read_csv('pos_weights_path.csv')
+                df = pd.read_csv('positive_weights.csv')
                 pos_weights = torch.tensor(df["Positive Weights"].values, dtype=torch.float)
                 self.loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weights)
             else:
@@ -53,15 +53,24 @@ def train(model_name_or_path: str,
             self.train_recall = torchmetrics.Recall(task="multilabel", num_labels=14, threshold=0.5)
             self.train_accuracy = torchmetrics.Accuracy(task="multilabel", num_labels=14, threshold=0.5)
             self.train_f1 = torchmetrics.F1Score(task="multilabel", num_labels=14, average="macro", threshold=0.5)
+            # Initialize loss accumulator
+            self.train_loss_sum = 0.0
+            self.train_loss_count = 0
     
         def training_step(self, batch, batch_idx):
             x, y = batch
             y_hat, additional_losses = self.model(x)
             loss = self.loss_fn(y_hat, y)
-            self.log("train/loss", loss, prog_bar=True)
+            
+            # Update loss accumulator.
+            self.train_loss_sum += loss.item()
+            self.train_loss_count += 1
+            
+            # Log per-step losses from additional_losses if desired.
             for k, v in additional_losses.items():
                 self.log(f"train/{k}", v)
-            log_confusion(self, y_hat, y, "train")
+            
+            # log_confusion(self, y_hat, y, "train")
             self.train_outputs.append({"y_hat": y_hat, "y": y})
             
             # Compute predictions with a threshold of 0.5.
@@ -73,16 +82,21 @@ def train(model_name_or_path: str,
             self.train_accuracy.update(preds, targets)
             self.train_f1.update(preds, targets)
     
-            # Every 50 steps, log the aggregated metrics and reset.
+            # Every 50 steps, log aggregated loss and metrics, then reset accumulators.
             if (batch_idx + 1) % 50 == 0:
-                self.log("train/precision", self.train_precision.compute(), on_step=True, prog_bar=True)
-                self.log("train/recall", self.train_recall.compute(), on_step=True, prog_bar=True)
-                self.log("train/accuracy", self.train_accuracy.compute(), on_step=True, prog_bar=True)
-                self.log("train/f1", self.train_f1.compute(), on_step=True, prog_bar=True)
+                avg_loss = self.train_loss_sum / self.train_loss_count
+                self.log("train/loss", avg_loss, on_step=True, prog_bar=True)
+                self.log("train/precision", self.train_precision.compute(), on_step=True)
+                self.log("train/recall", self.train_recall.compute(), on_step=True)
+                self.log("train/accuracy", self.train_accuracy.compute(), on_step=True)
+                self.log("train/f1", self.train_f1.compute(), on_step=True)
+                # Reset all metrics and loss accumulation
                 self.train_precision.reset()
                 self.train_recall.reset()
                 self.train_accuracy.reset()
                 self.train_f1.reset()
+                self.train_loss_sum = 0.0
+                self.train_loss_count = 0
     
             return loss
     
@@ -153,18 +167,13 @@ def train(model_name_or_path: str,
         else:
             raise ValueError(f"Unknown model: {model_name}")
 
-    # Create the lightning model
     l_model = Trainer(model)
-
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     logger = TensorBoardLogger("logs", name=f"{timestamp}_{model_name}")
     trainer = L.Trainer(max_epochs=epochs, logger=logger, callbacks=[CheckPointer()])
-    trainer.fit(
-        model=l_model,
-    )
-
-
+    trainer.fit(model=l_model)
+    
+    
 if __name__ == "__main__":
     from fire import Fire
-
     Fire(train)

@@ -8,7 +8,8 @@ def ensure_rgb(img: Image.Image) -> Image.Image:
 def get_transform(do_transform: bool,
                   model_name: str = None,
                   resize: int = None,
-                  norm: str = "efficientnet"):
+                  norm: str = "efficientnet",
+                  augment: bool = False):
     """
     Returns a torchvision Compose transform based on parameters.
 
@@ -17,6 +18,7 @@ def get_transform(do_transform: bool,
         model_name (str): Name of the model. If the model is an EfficientNet, a default resize is used if not provided.
         resize (int): The target size for resizing the image. Overrides the default EfficientNet value if provided.
         norm (str): Normalization type to use: "efficientnet" or "empirical".
+        augment (bool): Whether to add augmentation transforms to the pipeline.
 
     Returns:
         A torchvision.transforms.Compose object.
@@ -41,11 +43,21 @@ def get_transform(do_transform: bool,
         if resize is None:
             resize = 256
 
-        transform_list = [
-            T.Resize(resize),
+        transform_list = [T.Resize(resize)]
+        
+        # Optionally add augmentation transforms.
+        if augment:
+            transform_list += [
+                T.ColorJitter(brightness=0.2, contrast=0.2),
+                T.RandomRotation(degrees=5)
+            ]
+        
+        # Ensure image is RGB and convert to tensor.
+        transform_list += [
             T.Lambda(ensure_rgb),
             T.ToTensor()
         ]
+
         if norm == "efficientnet":
             transform_list.append(T.Normalize(mean=[0.485, 0.456, 0.406],
                                                 std=[0.229, 0.224, 0.225]))

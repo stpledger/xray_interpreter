@@ -53,9 +53,18 @@ def train(model_name_or_path: str,
             self.train_recall = torchmetrics.Recall(task="multilabel", num_labels=14, threshold=0.5)
             self.train_accuracy = torchmetrics.Accuracy(task="multilabel", num_labels=14, threshold=0.5)
             self.train_f1 = torchmetrics.F1Score(task="multilabel", num_labels=14, average="macro", threshold=0.5)
-            # Initialize loss accumulator
+            # Loss accumulator for training.
             self.train_loss_sum = 0.0
             self.train_loss_count = 0
+
+            # Initialize aggregated metrics for validation.
+            self.val_precision = torchmetrics.Precision(task="multilabel", num_labels=14, threshold=0.5)
+            self.val_recall = torchmetrics.Recall(task="multilabel", num_labels=14, threshold=0.5)
+            self.val_accuracy = torchmetrics.Accuracy(task="multilabel", num_labels=14, threshold=0.5)
+            self.val_f1 = torchmetrics.F1Score(task="multilabel", num_labels=14, average="macro", threshold=0.5)
+            # Loss accumulator for validation.
+            self.val_loss_sum = 0.0
+            self.val_loss_count = 0
     
         def training_step(self, batch, batch_idx):
             x, y = batch
@@ -82,7 +91,7 @@ def train(model_name_or_path: str,
             self.train_accuracy.update(preds, targets)
             self.train_f1.update(preds, targets)
     
-            # Every 50 steps, log aggregated loss and metrics, then reset accumulators.
+            # Every 50 steps, log aggregated training metrics and reset accumulators.
             if (batch_idx + 1) % 50 == 0:
                 avg_loss = self.train_loss_sum / self.train_loss_count
                 self.log("train/loss", avg_loss, on_step=True, prog_bar=True)
@@ -108,8 +117,22 @@ def train(model_name_or_path: str,
             self.log("validation/loss", loss, prog_bar=True)
             for k, v in additional_losses.items():
                 self.log(f"validation/{k}", v)
-            log_confusion(self, y_hat, y, "validation")
+            # log_confusion(self, y_hat, y, "validation")
             self.val_outputs.append({"y_hat": y_hat, "y": y})
+
+            # Accumulate validation loss.
+            self.val_loss_sum += loss.item()
+            self.val_loss_count += 1
+
+            # Compute predictions
+            preds = (torch.sigmoid(y_hat) > 0.5).int()
+            targets = y.int()
+            # Update validation metrics.
+            self.val_precision.update(preds, targets)
+            self.val_recall.update(preds, targets)
+            self.val_accuracy.update(preds, targets)
+            self.val_f1.update(preds, targets)
+    
             return loss
     
         def on_train_epoch_end(self):
@@ -123,6 +146,23 @@ def train(model_name_or_path: str,
             aggregated_y = torch.cat([out["y"] for out in self.val_outputs], dim=0)
             log_class_stats(self, aggregated_y_hat, aggregated_y, self.label_names, "validation")
             self.val_outputs.clear()
+
+            # Compute aggregated loss if any validation batches were processed.
+            if self.val_loss_count > 0:
+                avg_val_loss = self.val_loss_sum / self.val_loss_count
+                self.log("validation/loss", avg_val_loss, prog_bar=True)
+            # Log aggregated validation metrics.
+            self.log("validation/precision", self.val_precision.compute())
+            self.log("validation/recall", self.val_recall.compute())
+            self.log("validation/accuracy", self.val_accuracy.compute())
+            self.log("validation/f1", self.val_f1.compute())
+            # Reset validation accumulators and metrics.
+            self.val_loss_sum = 0.0
+            self.val_loss_count = 0
+            self.val_precision.reset()
+            self.val_recall.reset()
+            self.val_accuracy.reset()
+            self.val_f1.reset()
     
         def configure_optimizers(self):
             optimizer = torch.optim.AdamW(self.parameters(), lr=lr)

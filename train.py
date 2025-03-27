@@ -30,7 +30,8 @@ def train(model_name_or_path: str,
           warmup: float = 3.0,
           weighted: bool = True,
           fresh: bool = False, 
-          do_transform: bool = True, 
+          do_transform: bool = True,
+          do_augment: bool = True, 
           transform: str = "efficientnet", 
           res: int = None):
     
@@ -52,7 +53,8 @@ def train(model_name_or_path: str,
             self.train_precision = torchmetrics.Precision(task="multilabel", num_labels=14, threshold=0.5)
             self.train_recall = torchmetrics.Recall(task="multilabel", num_labels=14, threshold=0.5)
             self.train_accuracy = torchmetrics.Accuracy(task="multilabel", num_labels=14, threshold=0.5)
-            self.train_f1 = torchmetrics.F1Score(task="multilabel", num_labels=14, average="macro", threshold=0.5)
+            self.train_f1_macro = torchmetrics.F1Score(task="multilabel", num_labels=14, average="macro", threshold=0.5)
+            self.train_f1_micro = torchmetrics.F1Score(task="multilabel", num_labels=14, average="micro", threshold=0.5)
             # Loss accumulator for training.
             self.train_loss_sum = 0.0
             self.train_loss_count = 0
@@ -61,7 +63,8 @@ def train(model_name_or_path: str,
             self.val_precision = torchmetrics.Precision(task="multilabel", num_labels=14, threshold=0.5)
             self.val_recall = torchmetrics.Recall(task="multilabel", num_labels=14, threshold=0.5)
             self.val_accuracy = torchmetrics.Accuracy(task="multilabel", num_labels=14, threshold=0.5)
-            self.val_f1 = torchmetrics.F1Score(task="multilabel", num_labels=14, average="macro", threshold=0.5)
+            self.val_f1_macro = torchmetrics.F1Score(task="multilabel", num_labels=14, average="macro", threshold=0.5)
+            self.val_f1_micro = torchmetrics.F1Score(task="multilabel", num_labels=14, average="micro", threshold=0.5)
             # Loss accumulator for validation.
             self.val_loss_sum = 0.0
             self.val_loss_count = 0
@@ -89,7 +92,8 @@ def train(model_name_or_path: str,
             self.train_precision.update(preds, targets)
             self.train_recall.update(preds, targets)
             self.train_accuracy.update(preds, targets)
-            self.train_f1.update(preds, targets)
+            self.train_f1_macro.update(preds, targets)
+            self.train_f1_micro.update(preds, targets)
     
             # Every 50 steps, log aggregated training metrics and reset accumulators.
             if (batch_idx + 1) % 50 == 0:
@@ -98,12 +102,14 @@ def train(model_name_or_path: str,
                 self.log("train/precision", self.train_precision.compute(), on_step=True)
                 self.log("train/recall", self.train_recall.compute(), on_step=True)
                 self.log("train/accuracy", self.train_accuracy.compute(), on_step=True)
-                self.log("train/f1", self.train_f1.compute(), on_step=True)
+                self.log("train/f1_macro", self.train_f1_macro.compute(), on_step=True)
+                self.log("train/f1_micro", self.train_f1_micro.compute(), on_step=True)
                 # Reset all metrics and loss accumulation
                 self.train_precision.reset()
                 self.train_recall.reset()
                 self.train_accuracy.reset()
-                self.train_f1.reset()
+                self.train_f1_macro.reset()
+                self.train_f1_micro.reset()
                 self.train_loss_sum = 0.0
                 self.train_loss_count = 0
     
@@ -131,7 +137,8 @@ def train(model_name_or_path: str,
             self.val_precision.update(preds, targets)
             self.val_recall.update(preds, targets)
             self.val_accuracy.update(preds, targets)
-            self.val_f1.update(preds, targets)
+            self.val_f1_macro.update(preds, targets)
+            self.val_f1_micro.update(preds, targets)
     
             return loss
     
@@ -155,14 +162,16 @@ def train(model_name_or_path: str,
             self.log("validation/precision", self.val_precision.compute())
             self.log("validation/recall", self.val_recall.compute())
             self.log("validation/accuracy", self.val_accuracy.compute())
-            self.log("validation/f1", self.val_f1.compute())
+            self.log("validation/f1_macro", self.val_f1_macro.compute())
+            self.log("validation/f1_micro", self.val_f1_micro.compute())
             # Reset validation accumulators and metrics.
             self.val_loss_sum = 0.0
             self.val_loss_count = 0
             self.val_precision.reset()
             self.val_recall.reset()
             self.val_accuracy.reset()
-            self.val_f1.reset()
+            self.val_f1_macro.reset()
+            self.val_f1_micro.reset()
     
         def configure_optimizers(self):
             optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
@@ -180,12 +189,12 @@ def train(model_name_or_path: str,
             return [optimizer], [{"scheduler": scheduler, "interval": "step"}]
     
         def train_dataloader(self):
-            dataset = ImageDataset("train", False, transform=get_transform(do_transform, model_name, res, transform))
+            dataset = ImageDataset("train", False, transform=get_transform(do_transform, model_name, res, transform, do_augment))
             self.label_names = dataset.label_names
             return torch.utils.data.DataLoader(dataset, batch_size=batch_size, num_workers=4, shuffle=True, persistent_workers=True)
     
         def val_dataloader(self):
-            dataset = ImageDataset("test", False, transform=get_transform(do_transform, model_name, res, transform))
+            dataset = ImageDataset("test", False, transform=get_transform(do_transform, model_name, res, transform, do_augment))
             self.label_names = dataset.label_names
             return torch.utils.data.DataLoader(dataset, batch_size=batch_size*4, num_workers=4, shuffle=False)
     
